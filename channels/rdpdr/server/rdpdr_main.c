@@ -2689,12 +2689,15 @@ static UINT rdpdr_server_drive_create_directory_callback2(RdpdrServerContext* co
 	WINPR_ASSERT(context->priv);
 	WINPR_ASSERT(s);
 	WINPR_ASSERT(irp);
-	WINPR_UNUSED(s);
 
 	WLog_Print(context->priv->log, WLOG_DEBUG,
 	           "RdpdrServerDriveCreateDirectoryCallback2: deviceId=%" PRIu32
 	           ", completionId=%" PRIu32 ", ioStatus=0x%" PRIx32 "",
 	           deviceId, completionId, ioStatus);
+	/* DR_CLOSE_RSP trailing Padding (client-dependent size, MUST be ignored):
+	 * consume it so the read loop stays framed — otherwise the leftover bytes
+	 * are parsed as a bogus zero PDU header and rdpdr_server_thread aborts. */
+	Stream_Seek(s, Stream_GetRemainingLength(s));
 	/* Invoke the create directory completion routine. */
 	context->OnDriveCreateDirectoryComplete(context, irp->CallbackData, ioStatus);
 	/* Destroy the IRP. */
@@ -2808,7 +2811,6 @@ static UINT rdpdr_server_drive_delete_directory_callback2(RdpdrServerContext* co
                                                           RDPDR_IRP* irp, UINT32 deviceId,
                                                           UINT32 completionId, UINT32 ioStatus)
 {
-	WINPR_UNUSED(s);
 	WINPR_ASSERT(context);
 	WINPR_ASSERT(context->priv);
 	WINPR_ASSERT(irp);
@@ -2817,6 +2819,10 @@ static UINT rdpdr_server_drive_delete_directory_callback2(RdpdrServerContext* co
 	           "RdpdrServerDriveDeleteDirectoryCallback2: deviceId=%" PRIu32
 	           ", completionId=%" PRIu32 ", ioStatus=0x%" PRIx32 "",
 	           deviceId, completionId, ioStatus);
+	/* DR_CLOSE_RSP trailing Padding (client-dependent size, MUST be ignored):
+	 * consume it so the read loop stays framed — otherwise the leftover bytes
+	 * are parsed as a bogus zero PDU header and rdpdr_server_thread aborts. */
+	Stream_Seek(s, Stream_GetRemainingLength(s));
 	/* Invoke the delete directory completion routine. */
 	context->OnDriveDeleteDirectoryComplete(context, irp->CallbackData, ioStatus);
 	/* Destroy the IRP. */
@@ -3341,11 +3347,11 @@ static UINT rdpdr_server_drive_close_file_callback(RdpdrServerContext* context, 
 	           ", ioStatus=0x%" PRIx32 "",
 	           deviceId, completionId, ioStatus);
 
-	// padding 5 bytes
-	if (!Stream_CheckAndLogRequiredLengthWLog(context->priv->log, s, 5))
-		return ERROR_INVALID_DATA;
-
-	Stream_Seek(s, 5);
+	/* DR_CLOSE_RSP trailing Padding: client-dependent size (MS-RDPEFS says 5
+	 * bytes, mstsc sends 4) and MUST be ignored. Consume whatever remains of
+	 * this PDU so the read loop stays framed — a fixed-size check desyncs the
+	 * channel and aborts rdpdr_server_thread. */
+	Stream_Seek(s, Stream_GetRemainingLength(s));
 
 	/* Invoke the close file completion routine. */
 	context->OnDriveCloseFileComplete(context, irp->CallbackData, ioStatus);
@@ -3404,7 +3410,6 @@ static UINT rdpdr_server_drive_delete_file_callback2(RdpdrServerContext* context
                                                      RDPDR_IRP* irp, UINT32 deviceId,
                                                      UINT32 completionId, UINT32 ioStatus)
 {
-	WINPR_UNUSED(s);
 	WINPR_ASSERT(context);
 	WINPR_ASSERT(context->priv);
 	WINPR_ASSERT(irp);
@@ -3413,6 +3418,10 @@ static UINT rdpdr_server_drive_delete_file_callback2(RdpdrServerContext* context
 	           "RdpdrServerDriveDeleteFileCallback2: deviceId=%" PRIu32 ", completionId=%" PRIu32
 	           ", ioStatus=0x%" PRIx32 "",
 	           deviceId, completionId, ioStatus);
+	/* DR_CLOSE_RSP trailing Padding (client-dependent size, MUST be ignored):
+	 * consume it so the read loop stays framed — otherwise the leftover bytes
+	 * are parsed as a bogus zero PDU header and rdpdr_server_thread aborts. */
+	Stream_Seek(s, Stream_GetRemainingLength(s));
 	/* Invoke the delete file completion routine. */
 	context->OnDriveDeleteFileComplete(context, irp->CallbackData, ioStatus);
 	/* Destroy the IRP. */
@@ -3524,7 +3533,6 @@ static UINT rdpdr_server_drive_rename_file_callback3(RdpdrServerContext* context
                                                      UINT32 completionId, UINT32 ioStatus)
 {
 	WINPR_UNUSED(context);
-	WINPR_UNUSED(s);
 	WINPR_ASSERT(context);
 	WINPR_ASSERT(context->priv);
 	WINPR_ASSERT(irp);
@@ -3533,6 +3541,16 @@ static UINT rdpdr_server_drive_rename_file_callback3(RdpdrServerContext* context
 	           "RdpdrServerDriveRenameFileCallback3: deviceId=%" PRIu32 ", completionId=%" PRIu32
 	           ", ioStatus=0x%" PRIx32 "",
 	           deviceId, completionId, ioStatus);
+
+	/* This step is a Device Close Response (DR_CLOSE_RSP). Consume its trailing
+	 * Padding so the read loop stays framed for the next PDU; otherwise the
+	 * leftover bytes are parsed as a bogus zero PDU header and
+	 * rdpdr_server_thread aborts — killing ALL further device I/O after the
+	 * first rename. The Padding size is client-dependent (MS-RDPEFS says 5
+	 * bytes but mstsc sends 4) and MUST be ignored, so consume whatever
+	 * remains of this PDU rather than a fixed count. */
+	Stream_Seek(s, Stream_GetRemainingLength(s));
+
 	/* Destroy the IRP. */
 	rdpdr_server_irp_free(irp);
 	return CHANNEL_RC_OK;
