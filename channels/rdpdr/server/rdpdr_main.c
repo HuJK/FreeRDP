@@ -3266,11 +3266,13 @@ static UINT rdpdr_server_drive_write_file_callback(RdpdrServerContext* context, 
 	if (!Stream_CheckAndLogRequiredLengthWLog(context->priv->log, s, 5))
 		return ERROR_INVALID_DATA;
 
-	Stream_Read_UINT32(s, length); /* Length (4 bytes) */
+	Stream_Read_UINT32(s, length); /* Length (4 bytes) — bytes written */
 	Stream_Seek(s, 1);             /* Padding (1 byte) */
 
-	if (!Stream_CheckAndLogRequiredLengthWLog(context->priv->log, s, length))
-		return ERROR_INVALID_DATA;
+	/* DR_WRITE_RSP carries no payload after Padding; `length` is the count
+	 * of bytes written, NOT a trailing-data length (that copy/paste from the
+	 * read path made every successful write fail the check and skip the
+	 * completion, so the client's write response was never delivered). */
 
 	/* Invoke the write file completion routine. */
 	context->OnDriveWriteFileComplete(context, irp->CallbackData, ioStatus, length);
