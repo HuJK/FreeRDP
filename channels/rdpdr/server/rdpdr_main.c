@@ -909,6 +909,27 @@ out:
  *
  * @return 0 on success, otherwise a Win32 error code
  */
+/* Capability sets (CAP_*_TYPE, a small 1..5 enum) and device types
+ * (RDPDR_DTYP_*, a bitmask) use different numbering. Map a capability set
+ * type into the device-type space so it can be compared against
+ * context->supported. */
+static UINT16 rdpdr_captype_to_dtyp(UINT16 capType)
+{
+	switch (capType)
+	{
+		case CAP_PRINTER_TYPE:
+			return RDPDR_DTYP_PRINT;
+		case CAP_PORT_TYPE:
+			return RDPDR_DTYP_SERIAL | RDPDR_DTYP_PARALLEL;
+		case CAP_DRIVE_TYPE:
+			return RDPDR_DTYP_FILESYSTEM;
+		case CAP_SMARTCARD_TYPE:
+			return RDPDR_DTYP_SMARTCARD;
+		default: /* CAP_GENERAL_TYPE / unknown: not a device type */
+			return 0;
+	}
+}
+
 static UINT rdpdr_server_receive_core_capability_response(RdpdrServerContext* context, wStream* s,
                                                           const RDPDR_HEADER* header)
 {
@@ -926,7 +947,7 @@ static UINT rdpdr_server_receive_core_capability_response(RdpdrServerContext* co
 	Stream_Read_UINT16(s, numCapabilities); /* numCapabilities (2 bytes) */
 	Stream_Seek_UINT16(s);                  /* Padding (2 bytes) */
 
-	UINT16 caps = 0;
+	UINT16 clientDtyp = 0; /* device types the client responded with (RDPDR_DTYP_* space) */
 	for (UINT16 i = 0; i < numCapabilities; i++)
 	{
 		RDPDR_CAPABILITY_HEADER capabilityHeader = WINPR_C_ARRAY_INIT;
@@ -943,7 +964,7 @@ static UINT rdpdr_server_receive_core_capability_response(RdpdrServerContext* co
 		if (status != CHANNEL_RC_OK)
 			return status;
 
-		caps |= capabilityHeader.CapabilityType;
+		clientDtyp |= rdpdr_captype_to_dtyp(capabilityHeader.CapabilityType);
 		switch (capabilityHeader.CapabilityType)
 		{
 			case CAP_GENERAL_TYPE:
@@ -1007,22 +1028,6 @@ static UINT rdpdr_server_receive_core_capability_response(RdpdrServerContext* co
 				return ERROR_INVALID_DATA;
 		}
 
-		for (UINT16 x = 0; x < 16; x++)
-		{
-			const UINT16 mask = (UINT16)(1u << x);
-			if (((caps & mask) != 0) && ((context->supported & mask) == 0))
-			{
-				WLog_Print(context->priv->log, WLOG_WARN,
-				           "client sent capability %s we did not announce!",
-				           freerdp_rdpdr_dtyp_string(mask));
-			}
-
-			/* we assume the server supports the capability. so only deactivate what the client did
-			 * not respond with */
-			if ((caps & mask) == 0)
-				context->supported &= ~mask;
-		}
-
 		const size_t end = Stream_GetPosition(s);
 		const size_t diff = end - start;
 		if (diff != capabilityHeader.CapabilityLength + RDPDR_CAPABILITY_HEADER_LENGTH)
@@ -1033,6 +1038,26 @@ static UINT rdpdr_server_receive_core_capability_response(RdpdrServerContext* co
 			           rdpdr_cap_type_string(capabilityHeader.CapabilityType),
 			           capabilityHeader.CapabilityType, diff, capabilityHeader.CapabilityLength);
 		}
+	}
+
+	/* Narrow the announced device types to those the client actually
+	 * responded with a capability for; a device type the client omits is one
+	 * it does not support. Both operands are in the RDPDR_DTYP_* space (see
+	 * rdpdr_captype_to_dtyp) — do NOT compare raw CapabilityType values here. */
+	for (UINT16 x = 0; x < 16; x++)
+	{
+		const UINT16 mask = (UINT16)(1u << x);
+		if (((clientDtyp & mask) != 0) && ((context->supported & mask) == 0))
+		{
+			WLog_Print(context->priv->log, WLOG_WARN,
+			           "client sent capability %s we did not announce!",
+			           freerdp_rdpdr_dtyp_string(mask));
+		}
+
+		/* we assume the server supports the capability. so only deactivate what the client did
+		 * not respond with */
+		if ((clientDtyp & mask) == 0)
+			context->supported &= ~mask;
 	}
 
 	return CHANNEL_RC_OK;
