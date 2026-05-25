@@ -3667,10 +3667,13 @@ static UINT rdpdr_server_drive_rename_file(RdpdrServerContext* context, void* ca
 		return ERROR_INTERNAL_ERROR;
 	}
 
-	/* Send a request to open the file. */
+	/* Send a request to open the file. FileRenameInformation requires the
+	 * handle to carry DELETE access (MS-FSCC 2.4.34); without it the client
+	 * may reject or silently no-op the rename, so open with DELETE here. */
 	// NOLINTNEXTLINE(clang-analyzer-unix.Malloc): rdpdr_server_enqueue_irp owns irp
 	return rdpdr_server_send_device_create_request(context, deviceId, irp->CompletionId,
-	                                               irp->PathName, FILE_READ_DATA | SYNCHRONIZE,
+	                                               irp->PathName,
+	                                               DELETE | FILE_READ_DATA | SYNCHRONIZE,
 	                                               FILE_SYNCHRONOUS_IO_NONALERT, FILE_OPEN);
 }
 
