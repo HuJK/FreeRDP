@@ -3504,9 +3504,13 @@ static UINT rdpdr_server_drive_delete_file(RdpdrServerContext* context, void* ca
 		return ERROR_INTERNAL_ERROR;
 	}
 
-	/* Send a request to open the file. */
+	/* Send a request to open the file. FILE_DELETE_ON_CLOSE requires the
+	 * handle to carry DELETE access; FILE_READ_DATA alone makes the client
+	 * reject the open (or refuse the delete), so the file is never removed.
+	 * (rdpdr_server_drive_delete_directory already opens with DELETE.) */
 	return rdpdr_server_send_device_create_request(
-	    context, deviceId, irp->CompletionId, irp->PathName, FILE_READ_DATA | SYNCHRONIZE,
+	    context, deviceId, irp->CompletionId, irp->PathName,
+	    DELETE | FILE_READ_DATA | SYNCHRONIZE,
 	    FILE_DELETE_ON_CLOSE | FILE_SYNCHRONOUS_IO_NONALERT, FILE_OPEN);
 }
 
