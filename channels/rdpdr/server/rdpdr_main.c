@@ -2919,6 +2919,30 @@ static UINT rdpdr_server_drive_delete_directory(RdpdrServerContext* context, voi
  ************************************************/
 
 /**
+ * Close response for the directory handle opened to enumerate. Frees the IRP;
+ * exists so enumeration doesn't leak the handle (a leaked handle also blocks
+ * delete-on-close of that directory).
+ *
+ * @return 0 on success, otherwise a Win32 error code
+ */
+static UINT rdpdr_server_drive_query_directory_callback3(RdpdrServerContext* context, wStream* s,
+                                                         RDPDR_IRP* irp, UINT32 deviceId,
+                                                         UINT32 completionId, UINT32 ioStatus)
+{
+	WINPR_UNUSED(deviceId);
+	WINPR_UNUSED(completionId);
+	WINPR_UNUSED(ioStatus);
+	WINPR_ASSERT(context);
+	WINPR_ASSERT(context->priv);
+	WINPR_ASSERT(irp);
+	/* DR_CLOSE_RSP trailing Padding (client-dependent size, MUST be ignored):
+	 * consume it so the read loop stays framed, then free the IRP. */
+	Stream_Seek(s, Stream_GetRemainingLength(s));
+	rdpdr_server_irp_free(irp);
+	return CHANNEL_RC_OK;
+}
+
+/**
  * Function description
  *
  * @return 0 on success, otherwise a Win32 error code
@@ -2985,10 +3009,24 @@ static UINT rdpdr_server_drive_query_directory_callback2(RdpdrServerContext* con
 	}
 	else
 	{
-		/* Invoke the query directory completion routine. */
+		/* Enumeration finished (e.g. STATUS_NO_MORE_FILES). Report completion,
+		 * then CLOSE the directory handle — leaving it open leaks a handle per
+		 * enumeration and, while open, blocks delete-on-close of that
+		 * directory (so deleting an enumerated folder silently fails). */
 		context->OnDriveQueryDirectoryComplete(context, irp->CallbackData, ioStatus, nullptr);
-		/* Destroy the IRP. */
-		rdpdr_server_irp_free(irp);
+
+		irp->CompletionId = context->priv->NextCompletionId++;
+		irp->Callback = rdpdr_server_drive_query_directory_callback3;
+
+		if (!rdpdr_server_enqueue_irp(context, irp))
+		{
+			WLog_Print(context->priv->log, WLOG_ERROR, "rdpdr_server_enqueue_irp failed!");
+			rdpdr_server_irp_free(irp);
+			return ERROR_INTERNAL_ERROR;
+		}
+
+		return rdpdr_server_send_device_close_request(context, irp->DeviceId, irp->FileId,
+		                                              irp->CompletionId);
 	}
 
 	return CHANNEL_RC_OK;
