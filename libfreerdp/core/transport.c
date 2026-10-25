@@ -1458,18 +1458,24 @@ BOOL transport_is_write_blocked(rdpTransport* transport)
 
 int transport_drain_output_buffer(rdpTransport* transport)
 {
-	BOOL status = FALSE;
+	int status = FALSE;
 
 	WINPR_ASSERT(transport);
 	WINPR_ASSERT(transport->frontBio);
+
+	/* The flush moves the buffered BIO's ring buffer to the socket, which
+	 * transport_default_write appends to under WriteLock; a server writes
+	 * from other threads (e.g. pointer updates) while its peer thread
+	 * drains, so take the same lock. */
+	EnterCriticalSection(&(transport->WriteLock));
 	if (BIO_write_blocked(transport->frontBio))
 	{
 		if (BIO_flush(transport->frontBio) < 1)
-			return -1;
-
-		const long rc = BIO_write_blocked(transport->frontBio);
-		status = (rc != 0);
+			status = -1;
+		else
+			status = (BIO_write_blocked(transport->frontBio) != 0);
 	}
+	LeaveCriticalSection(&(transport->WriteLock));
 
 	return status;
 }
