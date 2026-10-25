@@ -238,6 +238,19 @@ static BOOL wts_read_drdynvc_data_first(rdpPeerChannel* channel, wStream* s, int
 		return FALSE;
 
 	Stream_Write(channel->receiveData, Stream_ConstPointer(s), length);
+
+	/* A DATA_FIRST PDU may carry the whole message (MS-RDPEDYC 3.1.5.1.3
+	 * does not forbid a sender doing so): deliver it now, as the client side
+	 * does, instead of waiting for DATA PDUs that never come. Otherwise the
+	 * next message's DATA PDU is taken for a continuation ("incorrect
+	 * fragment data", connection dropped), or a following DATA_FIRST
+	 * silently discards this message. */
+	if (length == channel->dvc_total_length)
+	{
+		channel->dvc_total_length = 0;
+		return wts_queue_receive_data(channel, Stream_Buffer(channel->receiveData), length,
+		                              nullptr, 0);
+	}
 	return TRUE;
 }
 
@@ -257,8 +270,11 @@ static BOOL wts_read_drdynvc_data(rdpPeerChannel* channel, wStream* s)
 
 		if (pos + length > channel->dvc_total_length)
 		{
+			WLog_ERR(TAG,
+			         "incorrect fragment data (ChannelId %" PRIu32 ": %" PRIuz " bytes after %" PRIuz
+			         " of %" PRIu32 "), discarded.",
+			         channel->channelId, length, pos, channel->dvc_total_length);
 			channel->dvc_total_length = 0;
-			WLog_ERR(TAG, "incorrect fragment data, discarded.");
 			return FALSE;
 		}
 
